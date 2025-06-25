@@ -2,7 +2,7 @@
 
 A Python-based system that allows users to describe tasks in natural language and have them executed by a team of specialized agents. It uses Google's Gemini API for natural language understanding and orchestrates various agents to complete complex tasks.
 
-![Task Automation System](https://i.imgur.com/placeholder-image.png)
+
 
 ## Features
 
