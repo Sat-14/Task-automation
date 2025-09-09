@@ -4,3 +4,8 @@ requests
 pydantic
 python-dotenv
 websockets
+twilio
+jinja2
+pyowm
+sendgrid
+gcsa

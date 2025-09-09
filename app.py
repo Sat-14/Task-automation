@@ -42,9 +42,10 @@ TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
-EMAIL_API_KEY = os.environ.get("EMAIL_API_KEY", "")
-WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY", "")
-BOOKING_API_KEY = os.environ.get("BOOKING_API_KEY", "")
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
+OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
+GOOGLE_CALENDAR_CREDENTIALS_FILE = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_FILE", "")
+GOOGLE_CALENDAR_TOKEN_FILE = os.environ.get("GOOGLE_CALENDAR_TOKEN_FILE", "")
 
 if not GEMINI_API_KEY:
     logger.warning("GEMINI_API_KEY not set. System will not function correctly!")
@@ -427,50 +428,89 @@ class SlackAgent(BaseAgent):
             return self._format_simulation_message(f"Would post '{message}' to Slack channel {channel}")
         
         try:
-            # In a real implementation, this would use the Slack API
-            # For now, we'll simulate the API call
-            await asyncio.sleep(1)
-            return {
-                "status": "success",
-                "message": f"[SUCCESS] Message successfully posted to {channel}",
-                "details": {"channel": channel, "message": message}
+            # Real Slack API implementation
+            import requests
+            
+            url = "https://slack.com/api/chat.postMessage"
+            headers = {
+                "Authorization": f"Bearer {self.api_token}",
+                "Content-Type": "application/json"
             }
+            payload = {
+                "channel": channel,
+                "text": message
+            }
+            
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            response_data = response.json()
+            if response_data.get("ok"):
+                return {
+                    "status": "success",
+                    "message": f"[SUCCESS] Message successfully posted to {channel}",
+                    "details": {
+                        "channel": channel, 
+                        "message": message,
+                        "timestamp": response_data.get("ts")
+                    }
+                }
+            else:
+                error = response_data.get("error", "Unknown error")
+                raise Exception(f"Slack API error: {error}")
             
         except Exception as e:
             logger.error(f"Slack error: {e}")
             raise Exception(f"Error posting to Slack: {str(e)}")
 
 class EmailAgent(BaseAgent):
-    """Agent for sending emails."""
+    """Agent for sending emails via SendGrid."""
     
     def __init__(self):
         super().__init__("EmailAgent")
-        self.api_key = EMAIL_API_KEY
+        self.api_key = SENDGRID_API_KEY
     
     async def validate_credentials(self):
-        return bool(self.api_key and not self.api_key.startswith('your_email'))
+        return bool(self.api_key and not self.api_key.startswith('your_sendgrid'))
     
     async def run(self, to: str, subject: str, body: str) -> dict:
         """Send an email to the specified recipient."""
         logger.info(f"Sending email to {to}: {subject}")
         
         if not await self.validate_credentials():
-            logger.warning("Email API key not set. Using simulation mode.")
+            logger.warning("SendGrid API key not set. Using simulation mode.")
             await asyncio.sleep(1)
             return self._format_simulation_message(f"Would send email to {to} with subject '{subject}'")
         
         try:
-            # In a real implementation, this would use an email API service
-            # Simulate API call
-            await asyncio.sleep(1)
+            # Real SendGrid API implementation
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail
+            
+            message = Mail(
+                from_email='noreply@taskautomation.app',  # You can customize this
+                to_emails=to,
+                subject=subject,
+                html_content=body
+            )
+            
+            sg = SendGridAPIClient(api_key=self.api_key)
+            response = sg.send(message)
+            
             return {
                 "status": "success",
                 "message": f"[SUCCESS] Email sent to {to} with subject: {subject}",
-                "details": {"to": to, "subject": subject, "body_length": len(body)}
+                "details": {
+                    "to": to, 
+                    "subject": subject, 
+                    "body_length": len(body),
+                    "status_code": response.status_code,
+                    "message_id": response.headers.get("X-Message-Id")
+                }
             }
             
         except Exception as e:
-            logger.error(f"Email error: {e}")
+            logger.error(f"SendGrid error: {e}")
             raise Exception(f"Failed to send email to {to}: {str(e)}")
 
 class CalendarAgent(BaseAgent):
@@ -531,21 +571,44 @@ class CommunicationAgent(BaseAgent):
             return self._format_simulation_message(f"Would {method} {recipient} with message: '{message}'")
             
         try:
-            # In a real implementation, this would use the Twilio API
-            # Simulate API call
-            await asyncio.sleep(1)
+            # Real Twilio API implementation
+            from twilio.rest import Client
+            
+            client = Client(self.account_sid, self.auth_token)
             
             if method.lower() == "text":
+                # Send SMS using Twilio API
+                message_obj = client.messages.create(
+                    body=message,
+                    from_=self.phone_number,
+                    to=recipient
+                )
                 return {
                     "status": "success",
                     "message": f"[SUCCESS] Text message sent to {recipient}",
-                    "details": {"method": "text", "recipient": recipient, "message": message}
+                    "details": {
+                        "method": "text", 
+                        "recipient": recipient, 
+                        "message": message,
+                        "message_sid": message_obj.sid
+                    }
                 }
             elif method.lower() == "call":
+                # Make voice call using Twilio API
+                call = client.calls.create(
+                    twiml=f'<Response><Say>{message}</Say></Response>',
+                    from_=self.phone_number,
+                    to=recipient
+                )
                 return {
                     "status": "success",
                     "message": f"[SUCCESS] Call initiated to {recipient}",
-                    "details": {"method": "call", "recipient": recipient, "talking_points": message}
+                    "details": {
+                        "method": "call", 
+                        "recipient": recipient, 
+                        "talking_points": message,
+                        "call_sid": call.sid
+                    }
                 }
             else:
                 raise ValueError(f"Unsupported communication method: {method}")
@@ -555,25 +618,25 @@ class CommunicationAgent(BaseAgent):
             raise Exception(f"Failed to {method} {recipient}: {str(e)}")
 
 class WeatherAgent(BaseAgent):
-    """Agent for retrieving weather information."""
+    """Agent for retrieving weather information via OpenWeatherMap."""
     
     def __init__(self):
         super().__init__("WeatherAgent")
-        self.api_key = WEATHER_API_KEY
+        self.api_key = OPENWEATHERMAP_API_KEY
     
     async def validate_credentials(self):
-        return bool(self.api_key and not self.api_key.startswith('your_weather'))
+        return bool(self.api_key and not self.api_key.startswith('your_openweathermap'))
     
     async def run(self, location: str, type: str = "current", days: int = 1) -> Dict:
         """Get current weather or forecast for a location."""
         logger.info(f"Getting {type} weather for {location}")
         
         if not await self.validate_credentials():
-            logger.warning("Weather API key not set. Using simulation mode.")
+            logger.warning("OpenWeatherMap API key not set. Using simulation mode.")
             
             base_data = {
                 "status": "simulated",
-                "warning": "[SIMULATION] SIMULATION MODE: Weather data is simulated due to missing API credentials",
+                "warning": "[SIMULATION] Weather data is simulated due to missing OpenWeatherMap API credentials",
                 "location": location
             }
             
@@ -600,51 +663,69 @@ class WeatherAgent(BaseAgent):
             return base_data
         
         try:
-            # In a real implementation, this would use a weather API
-            # Simulate API call
-            await asyncio.sleep(1)
+            # Real PyOWM (OpenWeatherMap) API implementation
+            from pyowm import OWM
             
-            # Return real API data
-            base_data = {
-                "status": "success",
-                "location": location
-            }
+            owm = OWM(self.api_key)
+            mgr = owm.weather_manager()
             
             if type.lower() == "current":
-                base_data.update({
-                    "temperature": 22,
-                    "conditions": "Partly Cloudy",
-                    "humidity": 65,
-                    "wind_speed": 10,
+                observation = mgr.weather_at_place(location)
+                weather = observation.weather
+                
+                return {
+                    "status": "success",
+                    "location": location,
+                    "temperature": weather.temperature('celsius')['temp'],
+                    "conditions": weather.detailed_status.title(),
+                    "humidity": weather.humidity,
+                    "wind_speed": weather.wind().get('speed', 0),
+                    "pressure": weather.pressure.get('press', 0),
+                    "visibility": weather.visibility_distance,
                     "timestamp": datetime.now().isoformat()
-                })
+                }
             else:
-                forecast = []
-                for i in range(min(days, 7)):
-                    day = datetime.now() + timedelta(days=i)
-                    forecast.append({
-                        "date": day.strftime("%Y-%m-%d"),
-                        "high": 20 + i,
-                        "low": 10 + i,
-                        "conditions": "Sunny" if i % 2 == 0 else "Cloudy"
-                    })
-                base_data["forecast"] = forecast
-            
-            return base_data
+                # Get forecast
+                forecaster = mgr.forecast_at_place(location, '3h')  # 3-hourly forecast
+                forecast_data = []
+                
+                forecast_list = forecaster.forecast.weathers[:min(days * 8, 40)]  # 8 forecasts per day (3h intervals)
+                
+                for i in range(0, len(forecast_list), 8):  # Group by days
+                    if i < len(forecast_list):
+                        weather = forecast_list[i]
+                        forecast_data.append({
+                            "date": weather.reference_time('iso').split('T')[0],
+                            "temperature": weather.temperature('celsius')['temp'],
+                            "conditions": weather.detailed_status.title(),
+                            "humidity": weather.humidity,
+                            "wind_speed": weather.wind().get('speed', 0)
+                        })
+                
+                return {
+                    "status": "success",
+                    "location": location,
+                    "forecast": forecast_data
+                }
                 
         except Exception as e:
-            logger.error(f"Weather error: {e}")
+            logger.error(f"OpenWeatherMap error: {e}")
             raise Exception(f"Failed to get weather for {location}: {str(e)}")
 
 class BookingAgent(BaseAgent):
-    """Agent for booking appointments, reservations, tickets, etc."""
+    """Agent for booking calendar events via Google Calendar."""
     
     def __init__(self):
         super().__init__("BookingAgent")
-        self.api_key = BOOKING_API_KEY
+        self.credentials_file = GOOGLE_CALENDAR_CREDENTIALS_FILE
+        self.token_file = GOOGLE_CALENDAR_TOKEN_FILE
     
     async def validate_credentials(self):
-        return bool(self.api_key and not self.api_key.startswith('your_booking'))
+        return bool(
+            self.credentials_file and 
+            not self.credentials_file.startswith('path/to/') and
+            os.path.exists(self.credentials_file)
+        )
     
     async def run(self, service_type: str, provider: str = None, 
                  details: Dict = None, preferences: Dict = None) -> Dict:
@@ -655,7 +736,7 @@ class BookingAgent(BaseAgent):
         preferences = preferences or {}
         
         if not await self.validate_credentials():
-            logger.warning("Booking API key not set. Using simulation mode.")
+            logger.warning("Google Calendar credentials not set. Using simulation mode.")
             
             # Simulate processing time
             await asyncio.sleep(2)
@@ -664,7 +745,7 @@ class BookingAgent(BaseAgent):
             
             return {
                 "status": "simulated",
-                "warning": "[SIMULATION] SIMULATION MODE: Booking was simulated due to missing API credentials",
+                "warning": "[SIMULATION] Calendar booking simulated due to missing Google Calendar credentials",
                 "booking_id": booking_id,
                 "service_type": service_type,
                 "provider": provider,
@@ -675,26 +756,49 @@ class BookingAgent(BaseAgent):
             }
         
         try:
-            # In a real implementation, this would use booking APIs
-            # Simulate API call
-            await asyncio.sleep(2)
+            # Real Google Calendar API implementation using gcsa
+            from gcsa.google_calendar import GoogleCalendar
+            from gcsa.event import Event
             
-            booking_id = f"booking_{hash(str(service_type) + str(provider) + str(datetime.now()))}"
+            # Extract booking details
+            title = f"{service_type} with {provider}" if provider else service_type
+            start_time = details.get('start_time') or (datetime.now() + timedelta(hours=24))
+            end_time = details.get('end_time') or (start_time + timedelta(hours=1))
+            description = details.get('description', f"Booking for {service_type}")
+            
+            # Initialize calendar (you may need to specify calendar ID)
+            calendar = GoogleCalendar(credentials_path=self.credentials_file)
+            
+            # Create calendar event
+            event = Event(
+                title,
+                start=start_time,
+                end=end_time,
+                description=description,
+                location=details.get('location', '')
+            )
+            
+            # Add event to calendar
+            created_event = calendar.add_event(event)
             
             return {
                 "status": "success",
                 "message": f"[SUCCESS] Successfully booked {service_type} with {provider}",
-                "booking_id": booking_id,
+                "booking_id": created_event.event_id,
                 "service_type": service_type,
                 "provider": provider,
                 "booking_status": "confirmed",
-                "details": details,
-                "confirmation_code": f"CONF{booking_id[-6:]}",
+                "details": {
+                    **details,
+                    "calendar_event_id": created_event.event_id,
+                    "calendar_link": created_event.html_link if hasattr(created_event, 'html_link') else None
+                },
+                "confirmation_code": f"CAL{created_event.event_id[-6:]}",
                 "timestamp": datetime.now().isoformat()
             }
                 
         except Exception as e:
-            logger.error(f"Booking error: {e}")
+            logger.error(f"Google Calendar booking error: {e}")
             raise Exception(f"Failed to book {service_type} with {provider}: {str(e)}")
 
 # =============================================================================
@@ -750,8 +854,7 @@ class TaskOrchestrator:
                 {
                     "parts": [
                         {"text": final_prompt}
-                    ],
-                    "role": "user"
+                    ]
                 }
             ],
             "generationConfig": {
