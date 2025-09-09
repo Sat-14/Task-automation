@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Automation System</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="mb-10">
+            <div class="flex justify-between items-center">
+                <h1 class="text-3xl font-bold text-gray-800">Task Automation System</h1>
+                <div class="flex items-center">
+                    <div id="connectionStatus" class="flex items-center mr-4">
+                        <span class="h-3 w-3 rounded-full bg-gray-400 mr-2"></span>
+                        <span class="text-sm text-gray-600">Connecting...</span>
+                    </div>
+                </div>
+            </div>
+            <p class="text-gray-600 mt-2">Describe your task in natural language and let our AI agents handle it for you.</p>
+        </header>
+        
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Task Input Section -->
+            <div class="lg:col-span-2 bg-white rounded-lg shadow-md p-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">What do you want to accomplish?</h2>
+                <div class="mb-4">
+                    <textarea id="taskInput" rows="4" class="w-full px-3 py-2 text-gray-700 border rounded-lg focus:outline-none focus:shadow-outline" placeholder="Example: Find doctors near me who accept Blue Cross insurance, sort by rating, call the highest-rated one for an appointment next Tuesday, and add it to my calendar."></textarea>
+                </div>
+                <div class="flex justify-end">
+                    <button id="submitTaskBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg focus:outline-none focus:shadow-outline transition duration-300">
+                        Execute Task
+                    </button>
+                </div>
+                
+                <!-- Current Task Status -->
+                <div id="currentTaskSection" class="mt-8 hidden">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-3">Current Task</h3>
+                    <div id="currentTaskCard" class="border border-gray-200 rounded-lg p-4">
+                        <p id="currentTaskDescription" class="text-gray-700 mb-3"></p>
+                        <div class="mb-4">
+                            <h4 class="text-sm font-medium text-gray-600 mb-2">Execution Plan:</h4>
+                            <ul id="executionPlanList" class="list-disc pl-5 text-sm text-gray-600"></ul>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-medium text-gray-600 mb-2">Progress:</h4>
+                            <div id="progressSteps" class="space-y-2"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- System Logs Section -->
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">System Logs</h2>
+                <div id="logContainer" class="log-container space-y-2 p-3 bg-gray-50 rounded-lg"></div>
+            </div>
+        </div>
+        
+        <!-- Task History Section -->
+        <div class="mt-10">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Task History</h2>
+            <div id="taskHistoryContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- Task history cards will be added here -->
+                <div class="text-gray-500 text-center py-8">No tasks completed yet</div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/app.js"></script>
+    <script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script>
+</body>
+</html>

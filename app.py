@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 # Configure logging
@@ -59,6 +61,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static files and templates
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 # In-memory task storage
 tasks_db: Dict[str, Dict[str, Any]] = {}
@@ -271,6 +277,14 @@ class BaseAgent:
         """Execute the agent's main functionality."""
         raise NotImplementedError("Subclasses must implement run()")
     
+    def _format_simulation_message(self, action_description: str) -> dict:
+        """Format a standardized simulation mode message."""
+        return {
+            "status": "simulated",
+            "message": f"[SIMULATION] {action_description}",
+            "warning": "This action was simulated due to missing API credentials"
+        }
+    
     async def validate_credentials(self):
         """Check if all required credentials are available."""
         return True
@@ -300,7 +314,7 @@ class KnowledgeAgent(BaseAgent):
                     
         return knowledge_data
     
-    async def run(self, query: str) -> str:
+    async def run(self, query: str) -> dict:
         """Search the knowledge base for information related to the query."""
         logger.info(f"Searching knowledge base for: {query}")
         
@@ -322,10 +336,25 @@ class KnowledgeAgent(BaseAgent):
         results.sort(key=lambda x: x[2], reverse=True)
         
         if not results:
-            return "No relevant information found in the knowledge base."
+            return {
+                "status": "no_results",
+                "message": "[NO RESULTS] No relevant information found in the knowledge base",
+                "query": query,
+                "searched_files": len(self.knowledge)
+            }
         
         # Return the most relevant information
-        return f"Found information on '{results[0][0]}': {results[0][1][:500]}..."
+        return {
+            "status": "success",
+            "message": f"[SUCCESS] Found information on '{results[0][0]}'",
+            "query": query,
+            "best_match": {
+                "topic": results[0][0],
+                "content_preview": results[0][1][:500] + "..." if len(results[0][1]) > 500 else results[0][1],
+                "relevance_score": results[0][2]
+            },
+            "total_matches": len(results)
+        }
 
 class SearchAgent(BaseAgent):
     """Agent for performing web searches."""
@@ -333,7 +362,7 @@ class SearchAgent(BaseAgent):
     def __init__(self):
         super().__init__("SearchAgent")
     
-    async def run(self, query: str) -> str:
+    async def run(self, query: str) -> dict:
         """Perform a web search for the given query."""
         logger.info(f"Searching the web for: {query}")
         
@@ -361,16 +390,22 @@ class SearchAgent(BaseAgent):
                 }
             ]
             
-            # Format search results
-            formatted_results = []
-            for i, result in enumerate(results, 1):
-                formatted_results.append(f"{i}. {result['title']}: {result['snippet']} [Source: {result['link']}]")
-            
-            return "\n\n".join(formatted_results)
+            return {
+                "status": "simulated",
+                "message": f"[SIMULATION] SIMULATION MODE: Web search results for '{query}' are simulated",
+                "warning": "Real web search requires a search API integration",
+                "query": query,
+                "results": results,
+                "result_count": len(results)
+            }
             
         except Exception as e:
             logger.error(f"Search error: {e}")
-            return f"Error performing search: {str(e)}"
+            return {
+                "status": "error",
+                "message": f"[ERROR] Error performing search: {str(e)}",
+                "query": query
+            }
 
 class SlackAgent(BaseAgent):
     """Agent for posting messages to Slack channels."""
@@ -380,22 +415,26 @@ class SlackAgent(BaseAgent):
         self.api_token = SLACK_BOT_TOKEN
     
     async def validate_credentials(self):
-        return bool(self.api_token)
+        return bool(self.api_token and not self.api_token.startswith('xoxb-your-slack'))
     
-    async def run(self, channel: str, message: str) -> str:
+    async def run(self, channel: str, message: str) -> dict:
         """Post a message to a Slack channel."""
         logger.info(f"Posting to Slack channel {channel}: {message}")
         
         if not await self.validate_credentials():
             logger.warning("Slack API token not set. Using simulation mode.")
             await asyncio.sleep(1)
-            return f"Simulated posting message to Slack channel {channel}"
+            return self._format_simulation_message(f"Would post '{message}' to Slack channel {channel}")
         
         try:
             # In a real implementation, this would use the Slack API
             # For now, we'll simulate the API call
             await asyncio.sleep(1)
-            return f"Message successfully posted to {channel}"
+            return {
+                "status": "success",
+                "message": f"[SUCCESS] Message successfully posted to {channel}",
+                "details": {"channel": channel, "message": message}
+            }
             
         except Exception as e:
             logger.error(f"Slack error: {e}")
@@ -409,23 +448,26 @@ class EmailAgent(BaseAgent):
         self.api_key = EMAIL_API_KEY
     
     async def validate_credentials(self):
-        return bool(self.api_key)
+        return bool(self.api_key and not self.api_key.startswith('your_email'))
     
-    async def run(self, to: str, subject: str, body: str) -> str:
+    async def run(self, to: str, subject: str, body: str) -> dict:
         """Send an email to the specified recipient."""
         logger.info(f"Sending email to {to}: {subject}")
         
-        # For demonstration purposes, we'll simulate sending an email
         if not await self.validate_credentials():
             logger.warning("Email API key not set. Using simulation mode.")
             await asyncio.sleep(1)
-            return f"Simulated email to {to} with subject: {subject}"
+            return self._format_simulation_message(f"Would send email to {to} with subject '{subject}'")
         
         try:
             # In a real implementation, this would use an email API service
             # Simulate API call
             await asyncio.sleep(1)
-            return f"Email sent to {to} with subject: {subject}"
+            return {
+                "status": "success",
+                "message": f"[SUCCESS] Email sent to {to} with subject: {subject}",
+                "details": {"to": to, "subject": subject, "body_length": len(body)}
+            }
             
         except Exception as e:
             logger.error(f"Email error: {e}")
@@ -447,13 +489,18 @@ class CalendarAgent(BaseAgent):
         await asyncio.sleep(1)
         
         event = {
-            "title": title,
-            "start_time": start_time,
-            "end_time": end_time,
-            "description": description,
-            "location": location,
-            "attendees": attendees or [],
-            "id": f"event_{hash(title + start_time)}"
+            "status": "simulated",
+            "message": f"[SIMULATION] SIMULATION MODE: Calendar event '{title}' would be created",
+            "warning": "Calendar operations are simulated - no real calendar API configured",
+            "event_details": {
+                "title": title,
+                "start_time": start_time,
+                "end_time": end_time,
+                "description": description,
+                "location": location,
+                "attendees": attendees or [],
+                "id": f"event_{hash(title + start_time)}"
+            }
         }
         
         return event
@@ -468,17 +515,20 @@ class CommunicationAgent(BaseAgent):
         self.phone_number = TWILIO_PHONE_NUMBER
     
     async def validate_credentials(self):
-        return all([self.account_sid, self.auth_token, self.phone_number])
+        return all([
+            self.account_sid and not self.account_sid.startswith('your_twilio'),
+            self.auth_token and not self.auth_token.startswith('your_twilio'), 
+            self.phone_number and not self.phone_number.startswith('your_twilio')
+        ])
     
-    async def run(self, method: str, recipient: str, message: str) -> str:
+    async def run(self, method: str, recipient: str, message: str) -> dict:
         """Make a phone call or send a text message."""
         logger.info(f"{method.capitalize()} to {recipient}: {message}")
         
-        # For demonstration purposes, we'll simulate the operation
         if not await self.validate_credentials():
             logger.warning("Twilio credentials not set. Using simulation mode.")
             await asyncio.sleep(1)
-            return f"Simulated {method} to {recipient} with message: {message}"
+            return self._format_simulation_message(f"Would {method} {recipient} with message: '{message}'")
             
         try:
             # In a real implementation, this would use the Twilio API
@@ -486,9 +536,17 @@ class CommunicationAgent(BaseAgent):
             await asyncio.sleep(1)
             
             if method.lower() == "text":
-                return f"Text message sent to {recipient}"
+                return {
+                    "status": "success",
+                    "message": f"[SUCCESS] Text message sent to {recipient}",
+                    "details": {"method": "text", "recipient": recipient, "message": message}
+                }
             elif method.lower() == "call":
-                return f"Call initiated to {recipient}"
+                return {
+                    "status": "success",
+                    "message": f"[SUCCESS] Call initiated to {recipient}",
+                    "details": {"method": "call", "recipient": recipient, "talking_points": message}
+                }
             else:
                 raise ValueError(f"Unsupported communication method: {method}")
                 
@@ -504,25 +562,29 @@ class WeatherAgent(BaseAgent):
         self.api_key = WEATHER_API_KEY
     
     async def validate_credentials(self):
-        return bool(self.api_key)
+        return bool(self.api_key and not self.api_key.startswith('your_weather'))
     
     async def run(self, location: str, type: str = "current", days: int = 1) -> Dict:
         """Get current weather or forecast for a location."""
         logger.info(f"Getting {type} weather for {location}")
         
-        # For demonstration purposes, we'll simulate weather data
         if not await self.validate_credentials():
             logger.warning("Weather API key not set. Using simulation mode.")
             
+            base_data = {
+                "status": "simulated",
+                "warning": "[SIMULATION] SIMULATION MODE: Weather data is simulated due to missing API credentials",
+                "location": location
+            }
+            
             if type.lower() == "current":
-                return {
-                    "location": location,
+                base_data.update({
                     "temperature": 22,
                     "conditions": "Partly Cloudy",
                     "humidity": 65,
                     "wind_speed": 10,
                     "timestamp": datetime.now().isoformat()
-                }
+                })
             else:
                 forecast = []
                 for i in range(min(days, 7)):
@@ -533,26 +595,29 @@ class WeatherAgent(BaseAgent):
                         "low": 10 + i,
                         "conditions": "Sunny" if i % 2 == 0 else "Cloudy"
                     })
-                return {
-                    "location": location,
-                    "forecast": forecast
-                }
+                base_data["forecast"] = forecast
+            
+            return base_data
         
         try:
             # In a real implementation, this would use a weather API
             # Simulate API call
             await asyncio.sleep(1)
             
-            # Return simulated data
+            # Return real API data
+            base_data = {
+                "status": "success",
+                "location": location
+            }
+            
             if type.lower() == "current":
-                return {
-                    "location": location,
+                base_data.update({
                     "temperature": 22,
                     "conditions": "Partly Cloudy",
                     "humidity": 65,
                     "wind_speed": 10,
                     "timestamp": datetime.now().isoformat()
-                }
+                })
             else:
                 forecast = []
                 for i in range(min(days, 7)):
@@ -563,10 +628,9 @@ class WeatherAgent(BaseAgent):
                         "low": 10 + i,
                         "conditions": "Sunny" if i % 2 == 0 else "Cloudy"
                     })
-                return {
-                    "location": location,
-                    "forecast": forecast
-                }
+                base_data["forecast"] = forecast
+            
+            return base_data
                 
         except Exception as e:
             logger.error(f"Weather error: {e}")
@@ -580,7 +644,7 @@ class BookingAgent(BaseAgent):
         self.api_key = BOOKING_API_KEY
     
     async def validate_credentials(self):
-        return bool(self.api_key)
+        return bool(self.api_key and not self.api_key.startswith('your_booking'))
     
     async def run(self, service_type: str, provider: str = None, 
                  details: Dict = None, preferences: Dict = None) -> Dict:
@@ -590,7 +654,6 @@ class BookingAgent(BaseAgent):
         details = details or {}
         preferences = preferences or {}
         
-        # For demonstration purposes, we'll simulate booking
         if not await self.validate_credentials():
             logger.warning("Booking API key not set. Using simulation mode.")
             
@@ -600,12 +663,14 @@ class BookingAgent(BaseAgent):
             booking_id = f"booking_{hash(str(service_type) + str(provider) + str(datetime.now()))}"
             
             return {
+                "status": "simulated",
+                "warning": "[SIMULATION] SIMULATION MODE: Booking was simulated due to missing API credentials",
                 "booking_id": booking_id,
                 "service_type": service_type,
                 "provider": provider,
-                "status": "confirmed",
+                "booking_status": "would_be_confirmed",
                 "details": details,
-                "confirmation_code": f"CONF{booking_id[-6:]}",
+                "confirmation_code": f"SIM{booking_id[-6:]}",
                 "timestamp": datetime.now().isoformat()
             }
         
@@ -617,10 +682,12 @@ class BookingAgent(BaseAgent):
             booking_id = f"booking_{hash(str(service_type) + str(provider) + str(datetime.now()))}"
             
             return {
+                "status": "success",
+                "message": f"[SUCCESS] Successfully booked {service_type} with {provider}",
                 "booking_id": booking_id,
                 "service_type": service_type,
                 "provider": provider,
-                "status": "confirmed",
+                "booking_status": "confirmed",
                 "details": details,
                 "confirmation_code": f"CONF{booking_id[-6:]}",
                 "timestamp": datetime.now().isoformat()
@@ -867,8 +934,20 @@ class TaskOrchestrator:
                         is_json_output=False
                     )
                     result = await agent.run(query)
-                    execution_result["message"] = f"Found results for: '{query}'"
-                    execution_result["context_updates"]["search_result"] = result
+                    
+                    # Handle new response format
+                    if isinstance(result, dict):
+                        status = result.get("status", "unknown")
+                        if status == "simulated":
+                            execution_result["message"] = result.get("message", f"Search simulated for: '{query}'")
+                            execution_result["warning"] = result.get("warning", "")
+                        else:
+                            execution_result["message"] = f"Found {result.get('result_count', 0)} results for: '{query}'"
+                        execution_result["context_updates"]["search_result"] = result
+                    else:
+                        # Fallback for old format
+                        execution_result["message"] = f"Found results for: '{query}'"
+                        execution_result["context_updates"]["search_result"] = result
                     
                 else:
                     # Parse the action details
@@ -880,25 +959,52 @@ class TaskOrchestrator:
                     # Execute with the parsed details
                     result = await agent.run(**parsed_details)
                     
+                    # Handle new response format for all agents
+                    if isinstance(result, dict) and "status" in result:
+                        status = result.get("status")
+                        agent_message = result.get("message", "")
+                        
+                        if status == "simulated":
+                            execution_result["message"] = agent_message or f"{agent_name} operation simulated"
+                            execution_result["warning"] = result.get("warning", "")
+                            execution_result["simulated"] = True
+                        elif status == "success":
+                            execution_result["message"] = agent_message or f"{agent_name} operation completed successfully"
+                        elif status == "no_results":
+                            execution_result["message"] = agent_message or f"{agent_name} found no results"
+                        elif status == "error":
+                            execution_result["success"] = False
+                            execution_result["message"] = agent_message or f"{agent_name} operation failed"
+                        else:
+                            execution_result["message"] = agent_message or f"{agent_name} operation completed"
+                    else:
+                        # Fallback for old format
+                        execution_result["message"] = f"{agent_name} operation completed"
+                    
                     # Update context with result
-                    if agent_name == "KnowledgeAgent":
-                        execution_result["context_updates"]["knowledge_answer"] = result
-                    elif agent_name == "WeatherAgent":
-                        execution_result["context_updates"]["weather_info"] = result
-                    elif agent_name == "SlackAgent":
-                        execution_result["message"] = f"Message posted to {parsed_details['channel']}"
-                    elif agent_name == "EmailAgent":
-                        execution_result["message"] = f"Email sent to {parsed_details['to']}"
-                    elif agent_name == "CalendarAgent":
-                        execution_result["context_updates"]["calendar_event"] = result
-                        execution_result["message"] = f"Calendar event '{parsed_details['title']}' processed"
-                    elif agent_name == "BookingAgent":
-                        execution_result["context_updates"]["booking_details"] = result
-                        execution_result["message"] = f"Booking completed for {parsed_details['service_type']}"
+                    execution_result["context_updates"][f"{agent_name.lower()}_result"] = result
                     
             else:
                 # For agents without parsers, just pass the action directly
                 result = await agent.run(action)
+                
+                # Handle new response format
+                if isinstance(result, dict) and "status" in result:
+                    status = result.get("status")
+                    agent_message = result.get("message", "")
+                    
+                    if status == "simulated":
+                        execution_result["message"] = agent_message or f"{agent_name} operation simulated"
+                        execution_result["warning"] = result.get("warning", "")
+                        execution_result["simulated"] = True
+                    elif status == "success":
+                        execution_result["message"] = agent_message or f"{agent_name} operation completed successfully"
+                    else:
+                        execution_result["message"] = agent_message or f"{agent_name} operation completed"
+                else:
+                    # Fallback for old format
+                    execution_result["message"] = f"{agent_name} operation completed"
+                
                 execution_result["context_updates"][f"{agent_name.lower()}_result"] = result
             
         except Exception as e:
@@ -909,9 +1015,12 @@ class TaskOrchestrator:
                 "context_updates": {}
             }
         
-        # Log step completion
+        # Log step completion with simulation awareness
         status = "completed" if execution_result["success"] else "failed"
-        log_type = "info" if execution_result["success"] else "error"
+        if execution_result.get("simulated"):
+            log_type = "warning"
+        else:
+            log_type = "info" if execution_result["success"] else "error"
         
         await self.ws_manager.broadcast(json.dumps({
             "type": "status_update",
@@ -922,14 +1031,20 @@ class TaskOrchestrator:
             "timestamp": datetime.now().isoformat()
         }))
         
-        await self.ws_manager.broadcast(json.dumps({
+        log_message = {
             "type": "log",
             "task_id": self.task_id,
             "agent": agent_name,
             "message": execution_result["message"],
             "log_type": log_type,
             "timestamp": datetime.now().isoformat()
-        }))
+        }
+        
+        # Add warning field if this was a simulation
+        if execution_result.get("warning"):
+            log_message["warning"] = execution_result["warning"]
+            
+        await self.ws_manager.broadcast(json.dumps(log_message))
         
         return execution_result
 
@@ -937,437 +1052,6 @@ class TaskOrchestrator:
 # HTML TEMPLATE
 # =============================================================================
 
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Task Automation System</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    <style>
-        .task-card {
-            transition: all 0.3s ease;
-        }
-        .task-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-        }
-        .log-container {
-            max-height: 300px;
-            overflow-y: auto;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        .pulse {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-    </style>
-</head>
-<body class="bg-gray-100 min-h-screen">
-    <div class="container mx-auto px-4 py-8">
-        <header class="mb-10">
-            <div class="flex justify-between items-center">
-                <h1 class="text-3xl font-bold text-gray-800">Task Automation System</h1>
-                <div class="flex items-center">
-                    <div id="connectionStatus" class="flex items-center mr-4">
-                        <span class="h-3 w-3 rounded-full bg-gray-400 mr-2"></span>
-                        <span class="text-sm text-gray-600">Connecting...</span>
-                    </div>
-                </div>
-            </div>
-            <p class="text-gray-600 mt-2">Describe your task in natural language and let our AI agents handle it for you.</p>
-        </header>
-        
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <!-- Task Input Section -->
-            <div class="lg:col-span-2 bg-white rounded-lg shadow-md p-6">
-                <h2 class="text-xl font-semibold text-gray-800 mb-4">What do you want to accomplish?</h2>
-                <div class="mb-4">
-                    <textarea id="taskInput" rows="4" class="w-full px-3 py-2 text-gray-700 border rounded-lg focus:outline-none focus:shadow-outline" placeholder="Example: Find doctors near me who accept Blue Cross insurance, sort by rating, call the highest-rated one for an appointment next Tuesday, and add it to my calendar."></textarea>
-                </div>
-                <div class="flex justify-end">
-                    <button id="submitTaskBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg focus:outline-none focus:shadow-outline transition duration-300">
-                        Execute Task
-                    </button>
-                </div>
-                
-                <!-- Current Task Status -->
-                <div id="currentTaskSection" class="mt-8 hidden">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-3">Current Task</h3>
-                    <div id="currentTaskCard" class="border border-gray-200 rounded-lg p-4">
-                        <p id="currentTaskDescription" class="text-gray-700 mb-3"></p>
-                        <div class="mb-4">
-                            <h4 class="text-sm font-medium text-gray-600 mb-2">Execution Plan:</h4>
-                            <ul id="executionPlanList" class="list-disc pl-5 text-sm text-gray-600"></ul>
-                        </div>
-                        <div>
-                            <h4 class="text-sm font-medium text-gray-600 mb-2">Progress:</h4>
-                            <div id="progressSteps" class="space-y-2"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- System Logs Section -->
-            <div class="bg-white rounded-lg shadow-md p-6">
-                <h2 class="text-xl font-semibold text-gray-800 mb-4">System Logs</h2>
-                <div id="logContainer" class="log-container space-y-2 p-3 bg-gray-50 rounded-lg"></div>
-            </div>
-        </div>
-        
-        <!-- Task History Section -->
-        <div class="mt-10">
-            <h2 class="text-xl font-semibold text-gray-800 mb-4">Task History</h2>
-            <div id="taskHistoryContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <!-- Task history cards will be added here -->
-                <div class="text-gray-500 text-center py-8">No tasks completed yet</div>
-            </div>
-        </div>
-    </div>
-    
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // Global variables
-            let socket;
-            let currentTaskId = null;
-            let taskHistory = [];
-            
-            // DOM elements
-            const connectionStatus = document.getElementById('connectionStatus');
-            const taskInput = document.getElementById('taskInput');
-            const submitTaskBtn = document.getElementById('submitTaskBtn');
-            const currentTaskSection = document.getElementById('currentTaskSection');
-            const currentTaskDescription = document.getElementById('currentTaskDescription');
-            const executionPlanList = document.getElementById('executionPlanList');
-            const progressSteps = document.getElementById('progressSteps');
-            const logContainer = document.getElementById('logContainer');
-            const taskHistoryContainer = document.getElementById('taskHistoryContainer');
-            
-            // Connect to WebSocket
-            function connectWebSocket() {
-                // Generate a unique client ID
-                const clientId = 'client_' + Math.random().toString(36).substr(2, 9);
-                
-                // Connect to WebSocket server
-                socket = new WebSocket(`ws://${window.location.host}/ws/${clientId}`);
-                
-                socket.onopen = function(e) {
-                    console.log('WebSocket connection established');
-                    connectionStatus.innerHTML = `
-                        <span class="h-3 w-3 rounded-full bg-green-500 mr-2"></span>
-                        <span class="text-sm text-green-600">Connected</span>
-                    `;
-                    submitTaskBtn.disabled = false;
-                };
-                
-                socket.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    handleWebSocketMessage(data);
-                };
-                
-                socket.onclose = function(event) {
-                    console.log('WebSocket connection closed');
-                    connectionStatus.innerHTML = `
-                        <span class="h-3 w-3 rounded-full bg-red-500 mr-2"></span>
-                        <span class="text-sm text-red-600">Disconnected</span>
-                    `;
-                    submitTaskBtn.disabled = true;
-                    
-                    // Attempt to reconnect after a delay
-                    setTimeout(connectWebSocket, 3000);
-                };
-                
-                socket.onerror = function(error) {
-                    console.error('WebSocket error:', error);
-                    connectionStatus.innerHTML = `
-                        <span class="h-3 w-3 rounded-full bg-red-500 mr-2"></span>
-                        <span class="text-sm text-red-600">Error</span>
-                    `;
-                };
-            }
-            
-            // Submit a new task
-            async function submitTask() {
-                const taskDescription = taskInput.value.trim();
-                if (!taskDescription) {
-                    alert('Please enter a task description');
-                    return;
-                }
-                
-                submitTaskBtn.disabled = true;
-                submitTaskBtn.innerHTML = `
-                    <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Processing...
-                `;
-                
-                try {
-                    const response = await fetch('/api/tasks', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            prompt: taskDescription,
-                            user_id: 'user_' + Math.random().toString(36).substr(2, 9)
-                        })
-                    });
-                    
-                    const data = await response.json();
-                    currentTaskId = data.task_id;
-                    
-                    // Clear current task display and prepare for new task
-                    currentTaskDescription.textContent = taskDescription;
-                    executionPlanList.innerHTML = '';
-                    progressSteps.innerHTML = '';
-                    currentTaskSection.classList.remove('hidden');
-                    
-                    // Add loading indicator until plan arrives
-                    executionPlanList.innerHTML = `
-                        <li class="pulse">Generating execution plan...</li>
-                    `;
-                    
-                    // Add log
-                    addLogEntry({
-                        agent: 'System',
-                        message: `Task submitted: ${taskDescription}`,
-                        log_type: 'info',
-                        timestamp: new Date().toISOString()
-                    });
-                    
-                } catch (error) {
-                    console.error('Error submitting task:', error);
-                    alert('Failed to submit task. Please try again.');
-                    
-                    addLogEntry({
-                        agent: 'System',
-                        message: `Error submitting task: ${error.message}`,
-                        log_type: 'error',
-                        timestamp: new Date().toISOString()
-                    });
-                    
-                } finally {
-                    submitTaskBtn.disabled = false;
-                    submitTaskBtn.innerHTML = 'Execute Task';
-                }
-            }
-            
-            // Handle WebSocket messages
-            function handleWebSocketMessage(data) {
-                console.log('Received message:', data);
-                
-                switch (data.type) {
-                    case 'log':
-                        addLogEntry(data);
-                        break;
-                        
-                    case 'plan':
-                        displayExecutionPlan(data.plan);
-                        break;
-                        
-                    case 'status_update':
-                        updateStepStatus(data);
-                        break;
-                        
-                    case 'task_complete':
-                        completeTask(data);
-                        break;
-                        
-                    default:
-                        console.log('Unknown message type:', data.type);
-                }
-            }
-            
-            // Add a log entry
-            function addLogEntry(log) {
-                const logEntry = document.createElement('div');
-                const timestamp = new Date(log.timestamp || Date.now()).toLocaleTimeString();
-                
-                let bgColor = 'bg-gray-100';
-                let textColor = 'text-gray-800';
-                let iconClass = 'fas fa-info-circle text-blue-500';
-                
-                switch (log.log_type) {
-                    case 'error':
-                        bgColor = 'bg-red-50';
-                        textColor = 'text-red-800';
-                        iconClass = 'fas fa-exclamation-circle text-red-500';
-                        break;
-                    case 'success':
-                        bgColor = 'bg-green-50';
-                        textColor = 'text-green-800';
-                        iconClass = 'fas fa-check-circle text-green-500';
-                        break;
-                    case 'warning':
-                        bgColor = 'bg-yellow-50';
-                        textColor = 'text-yellow-800';
-                        iconClass = 'fas fa-exclamation-triangle text-yellow-500';
-                        break;
-                }
-                
-                logEntry.className = `${bgColor} ${textColor} p-2 rounded-md text-sm`;
-                logEntry.innerHTML = `
-                    <div class="flex items-start">
-                        <div class="font-semibold mr-2">[${log.agent}]</div>
-                        <div class="flex-1">${log.message}</div>
-                        <div class="text-xs text-gray-500 ml-2">${timestamp}</div>
-                    </div>
-                `;
-                
-                logContainer.appendChild(logEntry);
-                logContainer.scrollTop = logContainer.scrollHeight;
-            }
-            
-            // Display execution plan
-            function displayExecutionPlan(plan) {
-             console.log("PLAN RECEIVED:", plan);
-              executionPlanList.innerHTML = '';
-                executionPlanList.classList.remove('pulse');
-                 const pulseElements = executionPlanList.querySelectorAll('.pulse');
-    pulseElements.forEach(el => el.remove());
-    console.log("executionPlanList element:", executionPlanList);
-    console.log("progressSteps element:", progressSteps);
-    
-    
-             console.log("Starting displayExecutionPlan with plan:", plan);
-                executionPlanList.innerHTML = '';
-                 if (plan && plan.length > 0) {
-                plan.forEach((step, index) => {
-                console.log(`Adding plan step ${index} to list`);
-                    const listItem = document.createElement('li');
-                    listItem.className = 'mb-1';
-                    listItem.textContent = step.description || step.action;
-                    executionPlanList.appendChild(listItem);
-                });
-                }
-                console.log("Finished adding plan steps to list, now initializing progress steps");
-                
-                // Initialize progress steps
-                progressSteps.innerHTML = '';
-                plan.forEach((step, index) => {
-                console.log(`Adding progress step ${index}`);
-                    const stepDiv = document.createElement('div');
-                    stepDiv.id = `step-${index}`;
-                    stepDiv.className = 'flex items-center';
-                    stepDiv.innerHTML = `
-                        <div class="flex items-center justify-center h-6 w-6 rounded-full bg-gray-200 text-xs text-gray-600 font-medium mr-2">
-                            ${index + 1}
-                        </div>
-                        <div class="text-sm text-gray-600 flex-1">${step.description || step.action}</div>
-                        <div class="ml-2">
-                            <span class="text-xs px-2 py-1 rounded-full bg-gray-200 text-gray-600">Pending</span>
-                        </div>
-                    `;
-                    progressSteps.appendChild(stepDiv);
-                });
-                console.log("Completed displayExecutionPlan function");
-            }
-            
-            // Update step status
-            function updateStepStatus(data) {
-                const stepIndex = data.step_index;
-                const status = data.status;
-                
-                if (stepIndex === undefined || !progressSteps.children[stepIndex]) {
-                    return;
-                }
-                
-                const stepDiv = progressSteps.children[stepIndex];
-                const statusSpan = stepDiv.querySelector('span');
-                const stepIndicator = stepDiv.querySelector('div:first-child');
-                
-                if (status === 'in-progress') {
-                    statusSpan.className = 'text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-600';
-                    statusSpan.textContent = 'In Progress';
-                    stepIndicator.className = 'flex items-center justify-center h-6 w-6 rounded-full bg-blue-500 text-xs text-white font-medium mr-2';
-                    stepDiv.classList.add('pulse');
-                } else if (status === 'completed') {
-                    statusSpan.className = 'text-xs px-2 py-1 rounded-full bg-green-100 text-green-600';
-                    statusSpan.textContent = 'Completed';
-                    stepIndicator.className = 'flex items-center justify-center h-6 w-6 rounded-full bg-green-500 text-xs text-white font-medium mr-2';
-                    stepDiv.classList.remove('pulse');
-                } else if (status === 'failed') {
-                    statusSpan.className = 'text-xs px-2 py-1 rounded-full bg-red-100 text-red-600';
-                    statusSpan.textContent = 'Failed';
-                    stepIndicator.className = 'flex items-center justify-center h-6 w-6 rounded-full bg-red-500 text-xs text-white font-medium mr-2';
-                    stepDiv.classList.remove('pulse');
-                }
-            }
-            
-            // Complete task
-            function completeTask(data) {
-                // Add to task history
-                addTaskToHistory({
-                    id: currentTaskId,
-                    description: currentTaskDescription.textContent,
-                    timestamp: new Date().toISOString()
-                });
-                
-                // Reset current task
-                setTimeout(() => {
-                    currentTaskId = null;
-                    taskInput.value = '';
-                }, 5000);
-            }
-            
-            // Add task to history
-            function addTaskToHistory(task) {
-                taskHistory.unshift(task);
-                
-                // Only keep last 10 tasks
-                if (taskHistory.length > 10) {
-                    taskHistory.pop();
-                }
-                
-                // Update display
-                updateTaskHistory();
-            }
-            
-            // Update task history display
-            function updateTaskHistory() {
-                taskHistoryContainer.innerHTML = '';
-                
-                if (taskHistory.length === 0) {
-                    taskHistoryContainer.innerHTML = '<div class="text-gray-500 text-center py-8">No tasks completed yet</div>';
-                    return;
-                }
-                
-                taskHistory.forEach(task => {
-                    const date = new Date(task.timestamp).toLocaleString();
-                    const card = document.createElement('div');
-                    card.className = 'task-card bg-white p-4 rounded-lg shadow-sm border border-gray-200';
-                    card.innerHTML = `
-                        <p class="font-medium text-gray-800 mb-2 truncate">${task.description}</p>
-                        <div class="flex justify-between items-center">
-                            <span class="text-xs text-gray-500">${date}</span>
-                            <button class="text-xs text-blue-600 hover:text-blue-800" data-task-id="${task.id}">View Details</button>
-                        </div>
-                    `;
-                    taskHistoryContainer.appendChild(card);
-                });
-            }
-            
-            // Event listeners
-            submitTaskBtn.addEventListener('click', submitTask);
-            
-            taskInput.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter' && e.ctrlKey) {
-                    submitTask();
-                }
-            });
-            
-            // Initial setup
-            connectWebSocket();
-        });
-    </script>
-    
-    <script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script>
-</body>
-</html>"""
 
 # =============================================================================
 # API ENDPOINTS
@@ -1376,7 +1060,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 @app.get("/", response_class=HTMLResponse)
 async def get_index(request: Request):
     """Serve the main HTML page."""
-    return HTMLResponse(content=HTML_TEMPLATE)
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/api/tasks", response_model=TaskResponse)
 async def create_task(task_request: TaskRequest):
