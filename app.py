@@ -416,7 +416,7 @@ class SlackAgent(BaseAgent):
         self.api_token = SLACK_BOT_TOKEN
     
     async def validate_credentials(self):
-        return bool(self.api_token and not self.api_token.startswith('xoxb-your-slack'))
+        return bool(self.api_token and not self.api_token.startswith('your_'))
     
     async def run(self, channel: str, message: str) -> dict:
         """Post a message to a Slack channel."""
@@ -471,7 +471,7 @@ class EmailAgent(BaseAgent):
         self.api_key = SENDGRID_API_KEY
     
     async def validate_credentials(self):
-        return bool(self.api_key and not self.api_key.startswith('your_sendgrid'))
+        return bool(self.api_key and not self.api_key.startswith('your_'))
     
     async def run(self, to: str, subject: str, body: str) -> dict:
         """Send an email to the specified recipient."""
@@ -556,9 +556,9 @@ class CommunicationAgent(BaseAgent):
     
     async def validate_credentials(self):
         return all([
-            self.account_sid and not self.account_sid.startswith('your_twilio'),
-            self.auth_token and not self.auth_token.startswith('your_twilio'), 
-            self.phone_number and not self.phone_number.startswith('your_twilio')
+            self.account_sid and not self.account_sid.startswith('your_'),
+            self.auth_token and not self.auth_token.startswith('your_'), 
+            self.phone_number and not self.phone_number.startswith('your_')
         ])
     
     async def run(self, method: str, recipient: str, message: str) -> dict:
@@ -625,7 +625,7 @@ class WeatherAgent(BaseAgent):
         self.api_key = OPENWEATHERMAP_API_KEY
     
     async def validate_credentials(self):
-        return bool(self.api_key and not self.api_key.startswith('your_openweathermap'))
+        return bool(self.api_key and not self.api_key.startswith('your_'))
     
     async def run(self, location: str, type: str = "current", days: int = 1) -> Dict:
         """Get current weather or forecast for a location."""
